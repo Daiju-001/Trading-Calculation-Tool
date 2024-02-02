@@ -1,0 +1,132 @@
+import math
+import requests
+from prettytable import PrettyTable
+
+def calculate_entry_allocation(position_size, entry_zone, entry_allocation_percentages):
+    entry_allocation = [position_size * percentage for percentage in entry_allocation_percentages]
+    
+    entry_prices = [entry_zone[0] + (entry_zone[1] - entry_zone[0]) * sum(entry_allocation_percentages[:i]) 
+                    for i in range(1, len(entry_allocation_percentages) + 1)]
+    
+    average_entry_price = sum(price * allocation for price, allocation in zip(entry_prices, entry_allocation)) / sum(entry_allocation)
+    return entry_allocation, entry_prices, average_entry_price
+
+def calculate_rounded_quantities(total_quantities, target_allocation_percentage):
+    return round(total_quantities * target_allocation_percentage)
+
+# parameters
+Pair = "APEUSDT"
+Lev = 5
+position_size = 5000
+entry_zone = (1.390, 1.365)
+stop_loss = 1.34
+
+target_prices = [1.43, 1.45, 1.47, 1.5 , 1.52]
+target_allocation_percentages = [0.30, 0.20, 0.15, 0.20, 0.15]
+
+entry_allocation_percentages = [0.30, 0.25, 0.20, 0.15, 0.10]
+entry_allocation_percentages.reverse() 
+
+# Display results with the desired format
+print(f"Pair: {Pair}")
+print(f"Leverage:{Lev}X")
+
+# Display Margin and liquidation
+print(f"Position Size: {position_size} USDT")
+M = position_size / Lev
+print(f"Margin:{M:.2f} USDT")
+
+# Specify the API endpoint URL
+url = "any exchange api for tradable symbols in perpetual futures "
+
+# Send a GET request to the API
+response = requests.get(url)
+
+# Check for successful response
+if response.status_code == 200:
+    # Parse the JSON data
+    data = response.json()
+
+    # Extract the symbol and step size map
+    symbol_step_size_map = {
+        symbol["symbol"]: next(
+            filter(lambda filter_: filter_["filterType"] == "LOT_SIZE", symbol["filters"])
+        )["stepSize"]
+        for symbol in sorted(data["symbols"], key=lambda x: x["symbol"])  # Sort symbols alphabetically
+    }
+
+    # Check if the specified PAIR is in the symbol_step_size_map
+    if Pair in symbol_step_size_map:
+
+        # Calculate total number of quantities based on position_size and step size
+        step_size = float(symbol_step_size_map[Pair])
+
+        # Assuming average_entry_price is your average entry price
+        entry_allocation, entry_prices, average_entry_price = calculate_entry_allocation(position_size, entry_zone, entry_allocation_percentages)
+        total_quantities = math.floor(position_size / average_entry_price / step_size) * step_size  
+
+        # Display calculated quantities based on step size
+        print(f"\nTotal Quantities : {total_quantities:.2f}")
+
+    else:
+        print("Specified PAIR not found in the symbol_step_size_map")
+        total_quantities = 0  # Or handle it according to your application logic
+
+    # Check if stop loss is greater than average entry price
+    if stop_loss > average_entry_price:
+        print("Stop loss cannot be greater than the average entry price. Exiting further calculations.")
+    else:
+        # Calculate entry allocation
+        entry_allocation, entry_prices, average_entry_price = calculate_entry_allocation(position_size, entry_zone, entry_allocation_percentages)
+
+        # Weighted Average Entry Price
+        print(f"\nAverage Entry Price: {average_entry_price:.2f}")
+
+        # Check position side based on SL and TP
+        if stop_loss < average_entry_price and max(target_prices) > average_entry_price:
+            position_side = "LONG"
+        elif stop_loss > average_entry_price and min(target_prices) < average_entry_price:
+            position_side = "SHORT"
+        else:
+            position_side = "SL is Wrong"
+
+        print(f"\nPosition Side: {position_side}")
+
+        # Calculate stop loss percentage and amount
+        price_difference = (average_entry_price - stop_loss)
+        if average_entry_price != 0:
+            sl_percentage = (price_difference / average_entry_price) * 100
+            sl_amount = (position_size * sl_percentage) / 100
+        else:
+            sl_percentage = sl_amount = float('nan')  # or handle it in a way that makes sense for your application
+            print("Warning: average_entry_price is zero.")
+
+        # Display Stop Loss and SL Percentage
+        print(f"\nStop Loss: {stop_loss:.2f}")
+        print(f"SL Percentage: {sl_percentage:.2f}%")
+
+        if sl_amount > M:
+            print("Position will get Liquidated")
+        else:
+            # Display Entry Allocation
+            print("\nEntry Allocation:-\n")
+            for i in range(len(entry_allocation)):
+                print(f"{i+1} || Entry Price {entry_prices[i]:.2f} USDT  || Entry Allocation: {entry_allocation[i]:.2f} USDT")
+
+            # Display Target Allocation
+            print("\nTarget Allocation:-\n")
+            overall_profits = 0
+            for i in range(len(target_prices)):
+                target_allocation_percentage = target_allocation_percentages[i]
+                rounded_quantities = calculate_rounded_quantities(total_quantities, target_allocation_percentage)
+                profit = rounded_quantities * (target_prices[i] - average_entry_price)
+                overall_profits += profit
+                print(f"{i+1} || TP {target_prices[i]:.2f} || Target Allocation: {target_allocation_percentage * 100:.1f}% || Quantities: {rounded_quantities} || Profit: {profit:.2f} USDT")
+
+            # Display Overall Profits
+            print(f"\nOverall Profits: {overall_profits:.2f} USDT")
+            print(f"Overall Loss :   {sl_amount:.2f} USDT")
+
+# Check for API request status
+if response.status_code != 200:
+    print("API request failed with status code:", response.status_code)
